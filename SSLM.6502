@@ -22,14 +22,14 @@ SEARCHMODE		EQU $CF			; last level of successful match.
 								; 01 found pair, looking for triple. 
 								; 80 found triple.
 SKIPMATCH		EQU $CE
-DIDSKIP			EQU	$FE			; did the last search skip over a match?
-
+DIDSKIP			EQU	$EB			; did the last search skip over a match?
 TOKENMAX		EQU $ED			; words 	$A00 - $2100
 								; pairs		$2100- $7E00
 								; triples	$7E00- $BE00 
 TEXTCOL			EQU $24
 TEXTROW			EQU $25
 WORDCOUNT		EQU $E3			; running EOR?
+JITTER			EQU $EC
 SCREENCOUNT		EQU $D7
 
 COUT      		EQU	$FDF0       ; CALLS THE OUTPUT ROUTINE
@@ -52,8 +52,8 @@ PAIRSEND		EQU #$81
 TRIPLESTART		EQU #$D0
 TRIPLESEND		EQU #$00
 
-QUADSEND		EQU #$AB		
 QUADSTART		EQU #$81
+QUADSEND		EQU #$AB		
 	
 				ORG $0800
 
@@ -78,50 +78,30 @@ QUADSTART		EQU #$81
 ;;; timer generates "random" seed for SKIPMATCH
 
 
-KEYLOOP					DEC WORDLO
-;							LDA WORDCOUNT
-;							ADC WORDLO
-						LDA WORDLO
-						EOR WORDHI
-						AND #$03
-						STA WORDHI
-
-						LDA KEY
-						BPL KEYLOOP						; otherwise
-
-						CMP #$8D						; enter
-						BEQ FIRSTWORD
-
-TYPEWRITER				;	TXA
-						JSR COUT
-						STA $C010
-						BCC KEYLOOP
-
-
 ; first word is at WORDHI/LO
 ; search the word list for matches
 ; count the bytes with bit7 high to find the INDEX of WORD
 
-FIRSTWORD				LDA #$00
+FIRSTWORD				LDA #$FF
 						STA SEARCHMODE					; sets up for first pair search					
-;							STA SKIPMATCH
-						STA DIDSKIP
-						TAY								; reset Y
-SETUPWORDLIST											; wordlist at $0A00 - $2048
-						STA TOKENLO
-														; counting upward to $3FF indexes (1023)
-;							STA WORDLO
-;							STA WORDHI
-		
-						LDA WORDSTART					; words start at A00
-						STA TOKENHI
-						
+
+					
+						LDA WORDHI
+						STA INDEXHI
+						LDA WORDLO
+						STA INDEXLO
 
 
 ; I have the index. Now print the word
 PRINTWORDFROMINDEX
+
+; A=WORDLO
+; Y=2
+						TAX
+
 ; in case RAM R/W is set.
 						LDA $C089
+						ROL JITTER
 
 ; shuffle the words down the line, keep last 3
 
@@ -136,14 +116,14 @@ PRINTWORDFROMINDEX
 		
 						LDA WORDHI
 						STA WORD2
-						LDA WORDLO
-						STA WORD2+1
+					;		LDA WORDLO
+						STX WORD2+1
 						
 FINDWORD				LDA WORDSTART				
 						STA TOKENHI
 						LDA #$00					; wordlist at $0A00 - $2046
 						STA TOKENLO
-						STA SKIPMATCH				; done with a seach run, reset the skippity skip.
+						STA SKIPMATCH				; done with a search run, reset the skippity skip.
 						TAY
 CHECKFORHIBIT			LDA (TOKENLO),Y
 						BPL NEXTZERO
@@ -165,13 +145,14 @@ PRECOMPOSE				LDX TEXTCOL					; skip ahead on col=0
 
 						LDA (TOKENLO),Y
 						CMP #$80					; starts with backspace? (88)
-						BEQ LOOKAHEAD				; carry set, skip the extra space.
+						BEQ LOOKAHEAD				; skip the extra space.
 						
 DOSPACE					INC TEXTCOL					; add space before word, not after
 DOSPACE2				INX
+						INC WORDCOUNT
 						
 LOOKAHEAD				
-						CPX #$26
+						CPX #$27
 						BCS LINEBREAK				; > #$27 (39)
 						INY
 						LDA (TOKENLO),Y
@@ -180,6 +161,7 @@ LOOKAHEAD
 						
 ; if == #$28, then break out and NEWLINE, then PRINTWORD
 LINEBREAK				JSR NEWLINE
+;							INC WORDCOUNT
 
 ZEROY					LDY #$00
 	
@@ -189,6 +171,16 @@ ZEROY					LDY #$00
 						JSR CLRSCR
 						INC SCREENCOUNT
 
+;;; new screen, new starting point
+						LDA WORDCOUNT
+						ADC SCREENCOUNT
+						STA WORDLO
+						EOR JITTER
+						AND #$03
+						STA WORDHI
+						JMP FIRSTWORD				; BRA?
+						
+						
  					
 PRINTWORD				LDA (TOKENLO),Y				; Y=0
 						CMP #$80					
@@ -201,13 +193,14 @@ PRINTCHAR				INY
 						ORA #$80
 
 CHARACTER				JSR COUT
-						EOR WORDCOUNT
-						STA WORDCOUNT				; rolling EOR?
+;							EOR WORDCOUNT
+;							STA WORDCOUNT				; rolling EOR?
 						
 						BCC PRINTCHAR				; seems like carry is always clear?
 
 DONEPRINTING			LDA WORDCOUNT
 MAGICHAPPENS			EOR SCREENCOUNT
+						EOR JITTER
 						AND #$0F					; max value?
 						STA SKIPMATCH				; i.e. how much jumping around?
 
@@ -217,6 +210,9 @@ MAGICHAPPENS			EOR SCREENCOUNT
 						BEQ FOUNDPAIR				; 00 = pair
 						BPL FOUNDTRIPLE				; 01 = triple
 													; 80 = quad						
+DIDFIRSTWORD			INC SEARCHMODE				; FF = first word -> 00
+						BEQ INDEXTOCOMPRESS
+
 FOUNDQUAD				LDA WORD2					; can we skip this on first pass?
 						STA INDEXHI					; if the wordcount is 00, maybe?
 						LDA WORD2+1
@@ -229,8 +225,9 @@ FOUNDTRIPLE				LDA #$7F
 						STA SEARCHMODE			
 		
 FOUNDPAIR				INC SEARCHMODE				; searchmode -> 80
+						ROL JITTER
 
-						LDA INDEXHI					; compressindex expects indexhi in ACCUMULATOR
+INDEXTOCOMPRESS			LDA INDEXHI					; compressindex expects indexhi in ACCUMULATOR
 COMPRESSANDFIND					
 ; find the logical next word
 						JSR COMPRESSINDEX
@@ -239,9 +236,10 @@ COMPRESSANDFIND
 ; compressed index bits in SCRATCHHI/LO
 
 NEXTWORD
+;						ROL JITTER
 
 SETUPSEARCH				LDA #$00					; PAIRs start at $2100
-;						STA DIDSKIP					; reset skip counting
+						STA DIDSKIP					; reset skip counting
 						STA TOKENLO
 						STA INDEXLO					; tracks indexes for next step
 						STA INDEXHI
@@ -267,12 +265,14 @@ PAIRSEARCH				LDA DIDSKIP					; already set?
 						BNE PAIRBEGIN				; probably skipped around on last pass, too
 		
 ADDSKIP					;	LDA WORDCOUNT				; skip=0, so let's bump up sometimes
-						LDA $25						; TXT ROW
-						AND #$03							; only sometimes.
-						ADC SKIPMATCH
-						STA SKIPMATCH
+						;	LDA $25						; TXT ROW
+						;	AND #$03							; only sometimes.
+						;	ADC SKIPMATCH
+						;	STA SKIPMATCH
 		
-PAIRBEGIN				LDA PAIRSTART
+PAIRBEGIN				LDA #$00
+						STA DIDSKIP
+						LDA PAIRSTART
 						STA TOKENHI
 						LDA PAIRSEND
 						BNE STARTSEARCH				; BRANCH ALWAYS
@@ -307,13 +307,18 @@ JUMPTHREE											; not equal, skip ahead 3 bytes to next phrase
 
 NOMATCHINGTOKENS
 						LDA DIDSKIP					; 00 = no skipping on last run. So no matches :(
+						ORA SKIPMATCH				
 						BEQ FAILURE					
+						LDA #$00 					; sometimes Y = 1.
+						STA DIDSKIP
 						
-						LDA SKIPMATCH				; didn't skip, and no skipping set? :(
-GOBACK					BEQ NEXTWORD
+						
+						
+GOBACK					LDA SKIPMATCH
+						BEQ NEXTWORD
 						DEC SKIPMATCH				; otherwise, skipped at least once.
 													; back to the top for another pass with the same index
-LASTPASS				BPL NEXTWORD					; branch always???
+LASTPASS				BPL NEXTWORD				; branch always???
 
 
 		
@@ -325,17 +330,20 @@ CHECKHIBYTE				STA TOKENLO
 		
 COMPARELO		
 						INY							; Y=1
-						LDA (TOKENLO),Y				
+						LDA (TOKENLO),Y
+						TAX
 						AND #$FC					; drop low 2 bits
 						CMP SCRATCHLO
 						BNE JUMPTHREE				; no match, skip 3 more bytes and keep going
 		
 FULLMATCH				DEC SKIPMATCH				; skip over a successful match to randomize ???
 						BMI FULLMATCH2				; skipmatch rolled to FF
-						INC DIDSKIP					; indicate we skipped
+						LDA #$01
+						STA DIDSKIP					; indicate we skipped
 						BNE JUMPTHREE				; BRA keep going
 		
-FULLMATCH2				LDA (TOKENLO),Y				; get the low nibble back
+FULLMATCH2				TXA							; get the low nibble back
+						;LDA (TOKENLO),Y				
 						AND #$03					; clear the high 6 bits
 						STA WORDHI
 						INY							; Y=2
@@ -353,37 +361,42 @@ FULLMATCH2				LDA (TOKENLO),Y				; get the low nibble back
 PRINTIT					JMP PRINTWORDFROMINDEX
 
 ; *****************************************************************************
-
+CONCLUSIONS				;	JMP FAILURE			
 FAILURE					LDA SEARCHMODE				; failed on quads? revert to triples, etc.
 						BNE FAILINGUP				; 00 = couldn't find a pair
 
-NOPAIRFORWORD			LDA $C089					; in case RAM R/W is set.
-;						LDA $C089
+NOPAIRFORWORD			
 
-						JSR NEWLINE
-						LDA WORDCOUNT
-						STA WORDLO
-						ADC TEXTROW
-						AND #$03
-						STA WORDHI					; generate a word index from 0-3ff
-						BPL PRINTIT					; branch always.
+;;; print period first? word=03ff
+						STA WORDLO					; A=00
+						DEC WORDLO
+						LDA #$03
+						STA WORDHI
+
+; generate a word index from 0-3ff
+;							LDX $C089					; in case RAM R/W is set.
+;							JSR NEWLINE
+;							LDA WORDCOUNT
+;							STA WORDLO
+;							ADC JITTER
+;							AND #$03
+;							STA WORDHI					
+
+
+						JMP FIRSTWORD
 						
 FAILINGUP				BMI GETWORDSASPAIR			; 80 = couldn't complete a quad
 													; get last two printed words as a pair and look for triple
 													; searchmode == 01? 
-						DEC SEARCHMODE				; 01 -> 00 revert to looking for pair.
+BACKTOBASICS			DEC SEARCHMODE				; 01 -> 00 revert to looking for pair.
 					
-						LDA WORD2+1
+						LDA WORD2+1					; go back to last word printed, find pair
 						STA INDEXLO
 						LDA WORD2
 						STA INDEXHI
 					
 DOITAGAIN				JMP COMPRESSANDFIND			; back to the top
 
-				
-
-;		; get last 2 words of triple/quad as pair, look for matching triple
-;		; compress word2, word1 into PAIR0..
 
 GETWORDSASPAIR
 
@@ -433,7 +446,8 @@ PAIRMID					INY							; match the second
 PAIRLO					INY							; match the third
 						LDA (TOKENLO),Y				
 						CMP PAIR0+2
-						BEQ DOITAGAIN 				
+						BNE SKIPPITY
+						JMP INDEXTOCOMPRESS 		; found the match. 
 		
 SKIPPITY				LDA TOKENLO					; next 3-byte pair 
 						CLC
@@ -442,7 +456,8 @@ SKIPPITY				LDA TOKENLO					; next 3-byte pair
 						INC TOKENHI
 						LDX TOKENHI
 						CPX TOKENMAX
-						BEQ CONCLUSIONS
+						BNE TOKENROLL
+						JMP FAILURE
 													
 TOKENROLL				STA TOKENLO					; new address +3
 						INC INDEXLO					; count index ++
@@ -450,7 +465,12 @@ TOKENROLL				STA TOKENLO					; new address +3
 						INC INDEXHI
 						BNE PAIRHI					; should branch always
 
-CONCLUSIONS				JMP FAILURE			
+
+				
+
+;		; get last 2 words of triple/quad as pair, look for matching triple
+;		; compress word2, word1 into PAIR0..
+
 		
 
 ; *****************************************************************************
@@ -459,26 +479,23 @@ COMPRESSINDEX
 ; JSR here with INDEXHI in ACCUMULATOR
 
 ;						LDA INDEXHI					; 
-						BEQ IFZEROHI2				; shortcut
 						ASL							; 
 						ASL							; 
 		
 IFZEROHI2				STA SCRATCHHI
 						LDA INDEXLO
+						PHA							; hold that for me, will ya?
 						AND #$C0
-						BEQ IFZEROLO2
-						
-;						CLC
+						CLC
 ; top two bits of lo into hi
 						ROL
 						ROL
 						ROL							; top two bits are now in bottom two bits.
-;						AND #$03					; clear top 6 bits				
 		
 ; combine into hi
 						ORA SCRATCHHI
 						STA SCRATCHHI
-IFZEROLO2				LDA INDEXLO
+IFZEROLO2				PLA							; k thx bye
 ; shift lo left 2x
 						ASL
 						ASL
