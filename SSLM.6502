@@ -201,7 +201,7 @@ CHARACTER				JSR COUT
 DONEPRINTING			LDA WORDCOUNT
 MAGICHAPPENS			EOR SCREENCOUNT
 						EOR JITTER
-						AND #$0F					; max value?
+						AND #$1F					; max value?
 						STA SKIPMATCH				; i.e. how much jumping around?
 
 ; did we match a pair or triple or quad?
